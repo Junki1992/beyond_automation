@@ -1,7 +1,12 @@
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 import datetime
+import os
+from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
+
+# .envファイルを読み込む
+load_dotenv()
 
 class BeyondAutoApp:
     def __init__(self, root):
@@ -65,6 +70,17 @@ class BeyondAutoApp:
 
     def initial_scan(self):
         try:
+            # 環境変数からログイン情報を取得
+            email = os.getenv("SQUADBEYOND_EMAIL")
+            password = os.getenv("SQUADBEYOND_PASSWORD")
+            
+            if not email or not password:
+                self.add_log("エラー: 環境変数が設定されていません")
+                self.add_log("SQUADBEYOND_EMAIL と SQUADBEYOND_PASSWORD を設定してください")
+                self.status_label.config(text="環境変数未設定", fg="#ff0000")
+                messagebox.showerror("エラー", "環境変数が設定されていません\n\nSQUADBEYOND_EMAIL と SQUADBEYOND_PASSWORD を設定してください")
+                return
+            
             self.add_log("自動ログイン・スキャン開始...")
             self.pw = sync_playwright().start()
             self.browser = self.pw.chromium.launch(headless=False)
@@ -72,8 +88,8 @@ class BeyondAutoApp:
             self.page = self.context.new_page()
             
             self.page.goto("https://app.squadbeyond.com/login")
-            self.page.get_by_role("textbox", name="メールアドレス").fill("youxiqiantian492@gmail.com")
-            self.page.get_by_role("textbox", name="パスワード").fill("kedGAe4KtKA64J_")
+            self.page.get_by_role("textbox", name="メールアドレス").fill(email)
+            self.page.get_by_role("textbox", name="パスワード").fill(password)
             self.page.locator('button[type="submit"]').click()
             self.page.wait_for_timeout(1500)
 

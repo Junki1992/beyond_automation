@@ -14,6 +14,7 @@ SquadBeyondの記事を自動的に複製するためのGUIアプリケーショ
 
 - Python 3.9以上
 - Playwright
+- python-dotenv
 - Tkinter（通常はPythonに標準で含まれています）
 
 ## セットアップ
@@ -21,7 +22,13 @@ SquadBeyondの記事を自動的に複製するためのGUIアプリケーショ
 ### 1. 依存関係のインストール
 
 ```bash
-pip install playwright
+pip install -r requirements.txt
+```
+
+または個別にインストールする場合：
+
+```bash
+pip install playwright python-dotenv
 ```
 
 ### 2. Playwrightブラウザのインストール
@@ -30,13 +37,55 @@ pip install playwright
 playwright install chromium
 ```
 
+### 3. 環境変数の設定
+
+ログイン情報を`.env`ファイルに設定します。
+
+プロジェクトルートに`.env`ファイルを作成し、以下の形式で記述してください：
+
+```env
+SQUADBEYOND_EMAIL=your_email@example.com
+SQUADBEYOND_PASSWORD=your_password
+```
+
+**注意**: `.env`ファイルは`.gitignore`に含まれているため、Gitにはコミットされません。セキュリティのため、実際のログイン情報を直接コミットしないでください。
+
+#### 環境変数として直接設定する場合（オプション）
+
+`.env`ファイルの代わりに、環境変数として直接設定することもできます。
+
+**macOS / Linux の場合:**
+
+```bash
+export SQUADBEYOND_EMAIL="your_email@example.com"
+export SQUADBEYOND_PASSWORD="your_password"
+```
+
+**Windows の場合:**
+
+コマンドプロンプト:
+```cmd
+set SQUADBEYOND_EMAIL=your_email@example.com
+set SQUADBEYOND_PASSWORD=your_password
+```
+
+PowerShell:
+```powershell
+$env:SQUADBEYOND_EMAIL="your_email@example.com"
+$env:SQUADBEYOND_PASSWORD="your_password"
+```
+
 ## 使い方
 
 ### アプリケーションの起動
 
+環境変数を設定した後、アプリケーションを起動します：
+
 ```bash
 python app.py
 ```
+
+**注意**: `.env`ファイルまたは環境変数が設定されていない場合、アプリケーションはエラーメッセージを表示して終了します。
 
 ### 操作手順
 
@@ -54,7 +103,8 @@ python app.py
 
 ## 注意事項
 
-- **ログイン情報**: 現在、ログイン情報（メールアドレス・パスワード）がコード内にハードコードされています。セキュリティ上の理由から、本番環境では環境変数や設定ファイルから読み込むことを推奨します
+- **ログイン情報**: ログイン情報は環境変数（`SQUADBEYOND_EMAIL`、`SQUADBEYOND_PASSWORD`）から読み込まれます。セキュリティ上の理由から、コード内に直接記載することは避けてください
+- **環境変数の設定**: アプリケーション起動前に必ず環境変数を設定してください。設定されていない場合、アプリケーションは正常に動作しません
 - **ブラウザ表示**: アプリケーション実行中は、PlaywrightがChromiumブラウザを起動します（`headless=False`）。ブラウザウィンドウを閉じないでください
 - **ネットワーク接続**: SquadBeyondへのアクセスにはインターネット接続が必要です
 - **XPath依存**: 一部の操作でXPathを使用しているため、SquadBeyondのUIが変更された場合、動作しなくなる可能性があります
