@@ -1,0 +1,25 @@
+# Backup files
+bk*.py
+task_bk.py
+
+# Virtual environments
+venv/
+venv313/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
