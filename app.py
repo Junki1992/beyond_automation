@@ -83,6 +83,13 @@ class BeyondAutoApp:
         self.log_area = scrolledtext.ScrolledText(root, width=65, height=15)
         self.log_area.pack(padx=40, pady=(5, 30))
 
+        # アプリ終了時のクリーンアップ処理を設定
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # 実行中フラグを初期化
+        self._is_running = False
+        self._is_reloading = False  # リロード処理中フラグ
+
         self.root.after(100, self.initial_scan)
 
     def refresh_url(self):
@@ -93,6 +100,31 @@ class BeyondAutoApp:
         self.log_area.insert(tk.END, f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {text}\n")
         self.log_area.see(tk.END)
         self.root.update()
+
+    def cleanup(self):
+        """ブラウザとPlaywrightのリソースをクリーンアップ"""
+        try:
+            self.add_log("リソースをクリーンアップ中...")
+            if self.page:
+                self.page.close()
+            if self.context:
+                self.context.close()
+            if self.browser:
+                self.browser.close()
+            if self.pw:
+                self.pw.stop()
+            self.add_log("クリーンアップ完了")
+        except Exception as e:
+            print(f"クリーンアップ中にエラーが発生しました: {e}")
+
+    def on_closing(self):
+        """アプリ終了時の処理"""
+        if hasattr(self, '_is_running') and self._is_running:
+            if not messagebox.askokcancel("終了確認", "実行中の処理があります。終了しますか？"):
+                return
+        
+        self.cleanup()
+        self.root.destroy()
 
     def initial_scan(self):
         try:
@@ -148,23 +180,77 @@ class BeyondAutoApp:
 
     def scan_sub_folders(self, event):
         name = self.parent_combo.get()
+        if not name:
+            return
+        
         self.add_log(f"{name} 展開...")
         try:
-            self.page.locator(f"#ts-sortableFolderGroupList p:has-text('{name}')").first.click()
-            self.page.wait_for_timeout(800)
+            # グループ一覧ページにいることを確認（必要に応じて戻る）
+            # グループ一覧の要素が存在するか確認
+            try:
+                group_list = self.page.locator('#ts-sortableFolderGroupList')
+                group_list.wait_for(state="visible", timeout=3000)
+            except:
+                self.add_log("警告: グループ一覧が見つかりません。ページをリロードしてください。")
+                return
+            
+            # 既に展開されているグループの場合は、一度閉じてから再度開く
+            # アクティブなコンテナを確認
+            is_already_open = self.page.evaluate(f"""(groupName) => {{
+                const containers = Array.from(document.querySelectorAll('div[id^=ts-sortableFolderGroupFolderList]'));
+                const active = containers.find(c => c.offsetParent !== null);
+                if (active) {{
+                    const groupText = active.closest('div')?.querySelector('p.MuiTypography-body1')?.innerText.trim();
+                    return groupText === groupName;
+                }}
+                return false;
+            }}""", name)
+            
+            if is_already_open:
+                self.add_log(f"{name} は既に展開されています。一度閉じてから再度開きます...")
+                # 一度クリックして閉じる
+                self.page.locator(f"#ts-sortableFolderGroupList p:has-text('{name}')").first.click()
+                self.page.wait_for_timeout(500)
+            
+            # グループをクリックして展開
+            group_element = self.page.locator(f"#ts-sortableFolderGroupList p:has-text('{name}')").first
+            group_element.wait_for(state="visible", timeout=5000)
+            group_element.click()
+            self.page.wait_for_timeout(1000)  # 展開アニメーションを待つ
             
             # 【修正点】アクティブな子コンテナからのみ抽出
             folders = self.page.evaluate(f"""(groupName) => {{
                 const containers = Array.from(document.querySelectorAll('div[id^=ts-sortableFolderGroupFolderList]'));
                 const active = containers.find(c => c.offsetParent !== null);
-                if (!active) return [];
-                return Array.from(active.querySelectorAll('p')).map(p => p.innerText.trim()).filter(t => t && t !== groupName);
+                if (!active) {{
+                    console.log('アクティブなコンテナが見つかりません');
+                    return [];
+                }}
+                const folderElements = Array.from(active.querySelectorAll('p'));
+                const folderNames = folderElements.map(p => p.innerText.trim()).filter(t => t && t !== groupName);
+                console.log('取得したフォルダ:', folderNames);
+                return folderNames;
             }}""", name)
             
-            self.child_combo['values'] = sorted(list(set(folders)))
-            self.add_log("フォルダ取得成功。")
+            if not folders:
+                self.add_log(f"警告: {name} のフォルダが見つかりませんでした")
+                # デバッグ情報を追加
+                debug_info = self.page.evaluate("""() => {{
+                    const containers = Array.from(document.querySelectorAll('div[id^=ts-sortableFolderGroupFolderList]'));
+                    return containers.map(c => ({{
+                        visible: c.offsetParent !== null,
+                        id: c.id,
+                        text: c.innerText.trim().substring(0, 50)
+                    }}));
+                }}""")
+                self.add_log(f"デバッグ情報: {debug_info}")
+            else:
+                self.child_combo['values'] = sorted(list(set(folders)))
+                self.add_log(f"フォルダ取得成功: {len(folders)}個")
         except Exception as e:
             self.add_log(f"展開エラー: {e}")
+            import traceback
+            self.add_log(f"詳細: {traceback.format_exc()}")
 
     def scan_articles(self, event):
         name = self.child_combo.get()
@@ -179,14 +265,29 @@ class BeyondAutoApp:
             self.add_log(f"記事取得エラー: {e}")
 
     def reload_page(self):
-        """ページをリロードして、グループ一覧を再取得"""
+        """ページをリロードして、グループ一覧を再取得し、選択と入力をリセット"""
+        # リロード処理の重複実行を防止
+        if hasattr(self, '_is_reloading') and self._is_reloading:
+            self.add_log("警告: 既にリロード処理実行中です。完了をお待ちください。")
+            return
+        
+        # 複製処理実行中はリロードをスキップ
+        if hasattr(self, '_is_running') and self._is_running:
+            self.add_log("警告: 複製処理実行中です。完了後にリロードしてください。")
+            return
+        
         if not self.page:
             self.add_log("エラー: ページが初期化されていません")
             return
         
+        self._is_reloading = True
         try:
             self.add_log("ページをリロード中...")
             self.status_label.config(text="リロード中...", fg="#ff9900")
+            
+            # リロード中はボタンを一時的に無効化
+            self.reload_btn.config(state="disabled")
+            self.run_btn.config(state="disabled")
             
             # 現在のURLを取得してリロード
             current_url = self.page.url
@@ -204,14 +305,14 @@ class BeyondAutoApp:
             groups = self.page.evaluate("""() => Array.from(document.querySelectorAll('#ts-sortableFolderGroupList p.MuiTypography-body1')).map(p => p.innerText.trim())""")
             self.parent_combo['values'] = sorted(list(set(groups)))
             
-            # すべての選択をクリア
+            # すべての選択をクリア（必ず実行されるように順序を明確化）
             self.parent_combo.set('')  # グループ選択をクリア
-            self.child_combo['values'] = []  # フォルダ選択肢をクリア
             self.child_combo.set('')  # フォルダ選択をクリア
-            self.target_combo['values'] = []  # 記事選択肢をクリア
+            self.child_combo['values'] = []  # フォルダ選択肢をクリア
             self.target_combo.set('')  # 記事選択をクリア
+            self.target_combo['values'] = []  # 記事選択肢をクリア
             
-            # 入力フィールドをクリア
+            # 入力フィールドをクリア（必ず実行されるように）
             self.new_title_entry.delete(0, tk.END)  # タイトルをクリア
             self.dir_entry.delete(0, tk.END)  # URL末尾をクリア
             
@@ -220,23 +321,55 @@ class BeyondAutoApp:
         except Exception as e:
             self.add_log(f"リロードエラー: {e}")
             self.status_label.config(text="リロードエラー", fg="#ff0000")
+        finally:
+            # リロード完了後はフラグをリセットしてボタンを再有効化
+            self._is_reloading = False
+            self.reload_btn.config(state="normal")
+            self.run_btn.config(state="normal")
 
     def run_automation(self):
-        self.add_log("複製を実行します...")
+        # 実行中の重複実行を防止
+        if hasattr(self, '_is_running') and self._is_running:
+            self.add_log("警告: 既に実行中のため、新しい実行をスキップします")
+            return
+        
+        self._is_running = True
+        # 実行中はボタンを無効化
+        self.run_btn.config(state="disabled")
+        self.reload_btn.config(state="disabled")
+        
         try:
+            self.add_log("複製を実行します...")
             # 入力値のバリデーション
             target_article = self.target_combo.get().strip()
             if not target_article:
                 self.add_log("エラー: 複製元の記事が選択されていません")
                 messagebox.showerror("エラー", "複製元の記事を選択してください")
+                self._is_running = False
+                self.run_btn.config(state="normal")
+                self.reload_btn.config(state="normal")
                 return
             
             title = self.new_title_entry.get().strip()
             url = self.dir_entry.get().strip()
             
+            # タイトルが空欄の場合の警告（必須ではないが推奨）
+            if not title:
+                response = messagebox.askyesno("警告", "新タイトルが空欄です。\n\n空欄のまま続行しますか？\n（推奨: タイトルを入力してください）")
+                if not response:
+                    self.add_log("ユーザーがタイトル未入力でキャンセルしました")
+                    self._is_running = False
+                    self.run_btn.config(state="normal")
+                    self.reload_btn.config(state="normal")
+                    return
+                self.add_log("警告: タイトルが空欄のまま続行します")
+            
             if not url:
                 self.add_log("エラー: URL末尾が空欄です")
                 messagebox.showerror("エラー", "URL末尾を入力してください")
+                self._is_running = False
+                self.run_btn.config(state="normal")
+                self.reload_btn.config(state="normal")
                 return
             
             self.add_log(f"複製元記事: {target_article}")
@@ -261,6 +394,9 @@ class BeyondAutoApp:
             if row_index == -1:
                 self.add_log(f"エラー: 記事 '{target_article}' が見つかりませんでした")
                 messagebox.showerror("エラー", f"記事 '{target_article}' がテーブル内に見つかりませんでした")
+                self._is_running = False
+                self.run_btn.config(state="normal")
+                self.reload_btn.config(state="normal")
                 return
             
             # 見つかった行の3点リーダーボタンをクリック
@@ -270,10 +406,28 @@ class BeyondAutoApp:
             self.add_log(f"記事 '{target_article}' の3点リーダーをクリックしました")
             self.page.wait_for_timeout(300)
 
-            xpath_menu = '/html/body/div[9]/div[3]/ul/li[5]/a'
-            self.page.locator(f"xpath={xpath_menu}").wait_for(state="visible", timeout=5000)
-            self.page.locator(f"xpath={xpath_menu}").click()
-            self.add_log("メニューをクリック")
+            # メニュー内の「複製」リンクを探す（XPathではなく、テキストとrole属性で検索）
+            try:
+                # まず、メニューが表示されるまで待つ
+                menu = self.page.locator('ul[role="menu"]')
+                menu.wait_for(state="visible", timeout=5000)
+                
+                # メニュー内の「複製」というテキストを持つリンクを探す
+                duplicate_link = menu.locator('li a:has-text("複製")')
+                duplicate_link.wait_for(state="visible", timeout=5000)
+                duplicate_link.click()
+                self.add_log("複製メニューをクリックしました")
+            except Exception as e:
+                # フォールバック: 5番目のメニュー項目をクリック（従来の方法）
+                self.add_log(f"警告: テキスト検索で見つからなかったため、フォールバック方法を使用: {e}")
+                try:
+                    duplicate_link = self.page.locator('ul[role="menu"] li:nth-child(5) a')
+                    duplicate_link.wait_for(state="visible", timeout=5000)
+                    duplicate_link.click()
+                    self.add_log("メニューをクリック（フォールバック）")
+                except Exception as e2:
+                    self.add_log(f"エラー: メニュー項目が見つかりませんでした: {e2}")
+                    raise Exception(f"複製メニューのクリックに失敗しました: {e2}")
 
             # 入力画面（Playwrightのfill()メソッドを使用）
             popup = self.page.locator('div[role="dialog"]')
@@ -366,13 +520,80 @@ class BeyondAutoApp:
             submit_btn.click()
             self.add_log("複製確定ボタンをクリックしました")
 
-            self.page.wait_for_timeout(3000)
+            # 複製成功の確認
+            self.add_log("複製処理の完了を待機中...")
+            try:
+                # ポップアップが非表示になるまで待つ（最大10秒）
+                popup.wait_for(state="hidden", timeout=10000)
+                self.add_log("ポップアップが閉じられました")
+            except Exception as e:
+                self.add_log(f"警告: ポップアップの非表示確認でタイムアウト: {e}")
+                # タイムアウトしても続行（処理が完了している可能性がある）
+            
+            # 追加の待機時間（ページの更新を待つ）
+            self.page.wait_for_timeout(2000)
+            
+            # エラーメッセージが表示されていないか確認
+            error_found = False
+            try:
+                # 一般的なエラーメッセージをチェック
+                error_selectors = [
+                    'text=エラー',
+                    'text=失敗',
+                    'text=error',
+                    '[role="alert"]',
+                    '.MuiAlert-root'  # Material-UIのアラート
+                ]
+                for selector in error_selectors:
+                    try:
+                        error_elem = self.page.locator(selector).first
+                        if error_elem.is_visible(timeout=1000):
+                            error_text = error_elem.inner_text()
+                            self.add_log(f"エラーメッセージが検出されました: {error_text}")
+                            error_found = True
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                self.add_log(f"エラーチェック中に例外が発生: {e}")
+            
+            if error_found:
+                raise Exception("複製処理中にエラーが検出されました")
+            
+            # 成功を確認（テーブルに新しい記事が追加されているか、またはURLが変更されているか）
+            # ここでは簡易的に、エラーがなければ成功とみなす
             self.add_log(f"【成功】複製元: {target_article} → 新タイトル: {title} で複製を完了しました")
             messagebox.showinfo("成功", f"複製完了\n\n複製元: {target_article}\n新タイトル: {title}")
             self.refresh_url()
         except Exception as e:
-            self.add_log(f"中断: {e}")
-            messagebox.showerror("エラー", str(e))
+            import traceback
+            error_type = type(e).__name__
+            error_message = str(e)
+            
+            # エラー種別に応じた詳細メッセージ
+            if "バリデーションエラー" in error_message or "URLバリデーションエラー" in error_message:
+                detailed_msg = f"バリデーションエラー\n\n{error_message}\n\nURL末尾の形式を確認してください。"
+            elif "タイムアウト" in error_message or "timeout" in error_message.lower():
+                detailed_msg = f"タイムアウトエラー\n\n{error_message}\n\nページの読み込みに時間がかかっています。ネットワーク接続を確認してください。"
+            elif "見つかりません" in error_message or "not found" in error_message.lower():
+                detailed_msg = f"要素が見つかりません\n\n{error_message}\n\nページの構造が変更された可能性があります。"
+            elif "複製メニュー" in error_message:
+                detailed_msg = f"メニュー操作エラー\n\n{error_message}\n\nページをリロードして再試行してください。"
+            else:
+                detailed_msg = f"エラーが発生しました\n\n種類: {error_type}\nメッセージ: {error_message}"
+            
+            # ログに詳細情報を記録
+            self.add_log(f"【エラー】種類: {error_type}")
+            self.add_log(f"【エラー】メッセージ: {error_message}")
+            self.add_log(f"【エラー】詳細:\n{traceback.format_exc()}")
+            
+            # ユーザーには分かりやすいメッセージを表示
+            messagebox.showerror("エラー", detailed_msg)
+        finally:
+            # 実行完了後はボタンを再有効化
+            self._is_running = False
+            self.run_btn.config(state="normal")
+            self.reload_btn.config(state="normal")
 
 if __name__ == "__main__":
     root = tk.Tk()
