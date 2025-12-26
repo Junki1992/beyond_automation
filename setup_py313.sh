@@ -7,8 +7,8 @@ echo "Python 3.13用のvenvを作成中..."
 echo "venvをアクティブ化中..."
 source venv313/bin/activate
 
-echo "playwrightをインストール中..."
-pip install playwright
+echo "依存関係をインストール中..."
+pip install -r requirements.txt
 
 echo "playwrightブラウザをインストール中..."
 playwright install

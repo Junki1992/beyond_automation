@@ -1,7 +1,29 @@
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 import datetime
+import os
 # Playwrightは後でインポート（tk.Tk()呼び出し後）
+
+# .envファイルを読み込む
+try:
+    from dotenv import load_dotenv
+    # スクリプトのディレクトリを基準に.envファイルのパスを取得
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(script_dir, '.env')
+    # load_dotenv()の戻り値でファイルが読み込まれたか確認
+    loaded = load_dotenv(env_path)
+    if not loaded:
+        # パスを指定しない場合も試す（カレントディレクトリから）
+        loaded = load_dotenv()
+    if loaded:
+        print(f".envファイルを読み込みました: {env_path}")
+    else:
+        print(f"警告: .envファイルが見つかりませんでした: {env_path}")
+except ImportError:
+    print("警告: python-dotenvがインストールされていません。環境変数から直接読み込みを試みます。")
+except Exception as e:
+    print(f"警告: .envファイルの読み込みでエラーが発生しました: {e}")
+    print("環境変数から直接読み込みを試みます。")
 
 class BeyondAutoApp:
     def __init__(self, root):
@@ -74,6 +96,25 @@ class BeyondAutoApp:
 
     def initial_scan(self):
         try:
+            # 環境変数からログイン情報を取得
+            email = os.getenv("SQUADBEYOND_EMAIL")
+            password = os.getenv("SQUADBEYOND_PASSWORD")
+            
+            # デバッグ情報
+            self.add_log(f"環境変数チェック: EMAIL={'設定済み' if email else '未設定'}, PASSWORD={'設定済み' if password else '未設定'}")
+            
+            if not email or not password:
+                self.add_log("エラー: 環境変数が設定されていません")
+                self.add_log("SQUADBEYOND_EMAIL と SQUADBEYOND_PASSWORD を設定してください")
+                # .envファイルのパスを表示
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                env_path = os.path.join(script_dir, '.env')
+                self.add_log(f".envファイルのパス: {env_path}")
+                self.add_log(f".envファイルの存在確認: {os.path.exists(env_path)}")
+                self.status_label.config(text="環境変数未設定", fg="#ff0000")
+                messagebox.showerror("エラー", "環境変数が設定されていません\n\nSQUADBEYOND_EMAIL と SQUADBEYOND_PASSWORD を設定してください")
+                return
+            
             self.add_log("自動ログイン・スキャン開始...")
             # Playwrightを遅延インポート（tk.Tk()呼び出し後）
             from playwright.sync_api import sync_playwright
@@ -83,8 +124,8 @@ class BeyondAutoApp:
             self.page = self.context.new_page()
             
             self.page.goto("https://app.squadbeyond.com/login")
-            self.page.get_by_role("textbox", name="メールアドレス").fill("youxiqiantian492@gmail.com")
-            self.page.get_by_role("textbox", name="パスワード").fill("kedGAe4KtKA64J_")
+            self.page.get_by_role("textbox", name="メールアドレス").fill(email)
+            self.page.get_by_role("textbox", name="パスワード").fill(password)
             self.page.locator('button[type="submit"]').click()
             self.page.wait_for_timeout(1500)
 
@@ -183,8 +224,50 @@ class BeyondAutoApp:
     def run_automation(self):
         self.add_log("複製を実行します...")
         try:
-            xpath_dots = '//*[@id="root"]/div[2]/div[2]/div[2]/div/div/div[2]/div[2]/div[3]/div/table/tbody/tr[2]/td[13]/div/div[1]/button'
-            self.page.locator(f"xpath={xpath_dots}").click()
+            # 入力値のバリデーション
+            target_article = self.target_combo.get().strip()
+            if not target_article:
+                self.add_log("エラー: 複製元の記事が選択されていません")
+                messagebox.showerror("エラー", "複製元の記事を選択してください")
+                return
+            
+            title = self.new_title_entry.get().strip()
+            url = self.dir_entry.get().strip()
+            
+            if not url:
+                self.add_log("エラー: URL末尾が空欄です")
+                messagebox.showerror("エラー", "URL末尾を入力してください")
+                return
+            
+            self.add_log(f"複製元記事: {target_article}")
+            self.add_log(f"新タイトル: {title if title else '(空欄)'}")
+            self.add_log(f"URL末尾: {url}")
+            
+            # 選択された記事名に一致するテーブル行を見つけて、その行の3点リーダーボタンをクリック
+            row_index = self.page.evaluate(f"""(articleName) => {{
+                const rows = Array.from(document.querySelectorAll('table tbody tr'));
+                for (let i = 0; i < rows.length; i++) {{
+                    const firstCell = rows[i].querySelector('td:first-child p');
+                    if (firstCell) {{
+                        const cellText = firstCell.innerText.split('\\n')[0].trim();
+                        if (cellText === articleName) {{
+                            return i + 1; // 1-indexed for XPath
+                        }}
+                    }}
+                }}
+                return -1; // 見つからない場合
+            }}""", target_article)
+            
+            if row_index == -1:
+                self.add_log(f"エラー: 記事 '{target_article}' が見つかりませんでした")
+                messagebox.showerror("エラー", f"記事 '{target_article}' がテーブル内に見つかりませんでした")
+                return
+            
+            # 見つかった行の3点リーダーボタンをクリック
+            dots_button = self.page.locator(f'table tbody tr:nth-child({row_index}) td:nth-child(13) div div button').first
+            dots_button.wait_for(state="visible", timeout=5000)
+            dots_button.click()
+            self.add_log(f"記事 '{target_article}' の3点リーダーをクリックしました")
             self.page.wait_for_timeout(300)
 
             xpath_menu = '/html/body/div[9]/div[3]/ul/li[5]/a'
@@ -197,16 +280,7 @@ class BeyondAutoApp:
             popup.wait_for(state="visible", timeout=10000)
             self.add_log("ポップアップを確認しました")
             
-            title = self.new_title_entry.get().strip()  # 先頭・末尾のスペースを削除
-            url = self.dir_entry.get().strip()  # 先頭・末尾のスペースを削除
-            
-            # URLが空の場合はエラー
-            if not url:
-                self.add_log("エラー: URL末尾が空欄です")
-                messagebox.showerror("エラー", "URL末尾を入力してください")
-                return
-            
-            self.add_log(f"指定タイトル: {title} / URL: {url} を書き込み中...")
+            self.add_log(f"指定タイトル: {title if title else '(空欄)'} / URL: {url} を書き込み中...")
             
             # タイトル入力欄（1番目のinput）
             title_input = popup.locator('input').first
@@ -293,8 +367,8 @@ class BeyondAutoApp:
             self.add_log("複製確定ボタンをクリックしました")
 
             self.page.wait_for_timeout(3000)
-            self.add_log(f"【成功】タイトル: {title} で複製を完了しました")
-            messagebox.showinfo("成功", "複製完了")
+            self.add_log(f"【成功】複製元: {target_article} → 新タイトル: {title} で複製を完了しました")
+            messagebox.showinfo("成功", f"複製完了\n\n複製元: {target_article}\n新タイトル: {title}")
             self.refresh_url()
         except Exception as e:
             self.add_log(f"中断: {e}")
