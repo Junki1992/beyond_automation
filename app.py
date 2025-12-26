@@ -327,13 +327,19 @@ class BeyondAutoApp:
             self.reload_btn.config(state="normal")
             self.run_btn.config(state="normal")
 
-    def run_automation(self):
-        # 実行中の重複実行を防止
-        if hasattr(self, '_is_running') and self._is_running:
-            self.add_log("警告: 既に実行中のため、新しい実行をスキップします")
-            return
-        
-        self._is_running = True
+    def run_automation(self, retry_count=0, max_retries=2):
+        """
+        複製処理を実行
+        Args:
+            retry_count: 現在のリトライ回数
+            max_retries: 最大リトライ回数
+        """
+        # 実行中の重複実行を防止（リトライ時は除く）
+        if retry_count == 0:
+            if hasattr(self, '_is_running') and self._is_running:
+                self.add_log("警告: 既に実行中のため、新しい実行をスキップします")
+                return
+            self._is_running = True
         # 実行中はボタンを無効化
         self.run_btn.config(state="disabled")
         self.reload_btn.config(state="disabled")
@@ -404,7 +410,8 @@ class BeyondAutoApp:
             dots_button.wait_for(state="visible", timeout=5000)
             dots_button.click()
             self.add_log(f"記事 '{target_article}' の3点リーダーをクリックしました")
-            self.page.wait_for_timeout(300)
+            # メニューが表示されるまで待つ（条件待機）
+            self.page.locator('ul[role="menu"]').wait_for(state="visible", timeout=5000)
 
             # メニュー内の「複製」リンクを探す（XPathではなく、テキストとrole属性で検索）
             try:
@@ -530,8 +537,13 @@ class BeyondAutoApp:
                 self.add_log(f"警告: ポップアップの非表示確認でタイムアウト: {e}")
                 # タイムアウトしても続行（処理が完了している可能性がある）
             
-            # 追加の待機時間（ページの更新を待つ）
-            self.page.wait_for_timeout(2000)
+            # ページの更新を待つ（テーブルが再読み込みされるまで待機）
+            try:
+                # テーブルが存在することを確認（ページが更新されたことを確認）
+                self.page.locator('table tbody tr').first.wait_for(state="visible", timeout=5000)
+            except:
+                # テーブルが見つからない場合は短い待機時間
+                self.page.wait_for_timeout(1000)
             
             # エラーメッセージが表示されていないか確認
             error_found = False
@@ -565,22 +577,63 @@ class BeyondAutoApp:
             self.add_log(f"【成功】複製元: {target_article} → 新タイトル: {title} で複製を完了しました")
             messagebox.showinfo("成功", f"複製完了\n\n複製元: {target_article}\n新タイトル: {title}")
             self.refresh_url()
+            
+            # 複製成功後に選択をクリア（次回実行時の混乱を防ぐ）
+            self.parent_combo.set('')
+            self.child_combo.set('')
+            self.child_combo['values'] = []
+            self.target_combo.set('')
+            self.target_combo['values'] = []
+            self.add_log("選択をクリアしました（次回実行の準備完了）")
         except Exception as e:
             import traceback
             error_type = type(e).__name__
             error_message = str(e)
             
+            # リトライ可能なエラーかどうかを判定
+            retryable_errors = [
+                "タイムアウト",
+                "timeout",
+                "ネットワーク",
+                "network",
+                "接続",
+                "connection",
+                "要素が見つかりません",
+                "not found",
+                "複製メニュー"
+            ]
+            
+            is_retryable = any(keyword in error_message.lower() or keyword in error_type.lower() for keyword in retryable_errors)
+            
+            # リトライ可能で、まだリトライ回数に余裕がある場合
+            if is_retryable and retry_count < max_retries:
+                retry_count += 1
+                self.add_log(f"【リトライ】エラーが発生しましたが、リトライします ({retry_count}/{max_retries})")
+                self.add_log(f"【エラー】種類: {error_type}, メッセージ: {error_message}")
+                
+                # ボタンを再有効化してからリトライ
+                self._is_running = False
+                self.run_btn.config(state="normal")
+                self.reload_btn.config(state="normal")
+                
+                # 少し待ってからリトライ
+                self.page.wait_for_timeout(2000)
+                
+                # リトライ実行
+                return self.run_automation(retry_count=retry_count, max_retries=max_retries)
+            
+            # リトライ不可、または最大リトライ回数に達した場合
             # エラー種別に応じた詳細メッセージ
             if "バリデーションエラー" in error_message or "URLバリデーションエラー" in error_message:
                 detailed_msg = f"バリデーションエラー\n\n{error_message}\n\nURL末尾の形式を確認してください。"
             elif "タイムアウト" in error_message or "timeout" in error_message.lower():
-                detailed_msg = f"タイムアウトエラー\n\n{error_message}\n\nページの読み込みに時間がかかっています。ネットワーク接続を確認してください。"
+                detailed_msg = f"タイムアウトエラー\n\n{error_message}\n\nページの読み込みに時間がかかっています。ネットワーク接続を確認してください。\n\nリトライ回数: {retry_count}/{max_retries}"
             elif "見つかりません" in error_message or "not found" in error_message.lower():
-                detailed_msg = f"要素が見つかりません\n\n{error_message}\n\nページの構造が変更された可能性があります。"
+                detailed_msg = f"要素が見つかりません\n\n{error_message}\n\nページの構造が変更された可能性があります。\n\nリトライ回数: {retry_count}/{max_retries}"
             elif "複製メニュー" in error_message:
-                detailed_msg = f"メニュー操作エラー\n\n{error_message}\n\nページをリロードして再試行してください。"
+                detailed_msg = f"メニュー操作エラー\n\n{error_message}\n\nページをリロードして再試行してください。\n\nリトライ回数: {retry_count}/{max_retries}"
             else:
-                detailed_msg = f"エラーが発生しました\n\n種類: {error_type}\nメッセージ: {error_message}"
+                detailed_msg = f"エラーが発生しました\n\n種類: {error_type}\nメッセージ: {error_message}\n\nリトライ回数: {retry_count}/{max_retries}"
             
             # ログに詳細情報を記録
             self.add_log(f"【エラー】種類: {error_type}")
