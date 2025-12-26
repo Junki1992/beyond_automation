@@ -48,6 +48,13 @@ SQUADBEYOND_EMAIL=your_email@example.com
 SQUADBEYOND_PASSWORD=your_password
 ```
 
+**重要**: `.env`ファイルの記述時の注意点
+- 各行は `変数名=値` の形式で記述してください
+- 値にスペースが含まれる場合は、引用符で囲む必要はありません（囲んでも問題ありません）
+- コメントは `#` で始まる行に記述してください
+- 空行は無視されます
+- 等号（`=`）の前後に不要なスペースを入れないでください
+
 **注意**: `.env`ファイルは`.gitignore`に含まれているため、Gitにはコミットされません。セキュリティのため、実際のログイン情報を直接コミットしないでください。
 
 #### 環境変数として直接設定する場合（オプション）
@@ -111,6 +118,28 @@ python app.py
 
 ## トラブルシューティング
 
+### .envファイルのパースエラー
+
+`python-dotenv could not parse statement starting at line X` というエラーが表示される場合：
+
+1. `.env`ファイルの形式を確認してください
+2. 各行は `変数名=値` の形式である必要があります
+3. 等号（`=`）の前後にスペースを入れないでください
+4. コメントは `#` で始まる行に記述してください
+5. 空行や不正な文字が含まれていないか確認してください
+
+正しい形式の例：
+```env
+SQUADBEYOND_EMAIL=your_email@example.com
+SQUADBEYOND_PASSWORD=your_password
+```
+
+間違った形式の例：
+```env
+SQUADBEYOND_EMAIL = your_email@example.com  # 等号の前後にスペースがある
+SQUADBEYOND_PASSWORD="your_password"  # 引用符は不要（あっても問題ないが、パースエラーの原因になる場合がある）
+```
+
 ### エラーが発生した場合
 
 - ログエリアに表示されるエラーメッセージを確認してください
@@ -126,6 +155,32 @@ pip uninstall playwright
 pip install playwright
 playwright install chromium
 ```
+
+### macOSバージョンエラー
+
+`macOS 26 (2601) or later required, have instead 16 (1601)` というエラーが表示される場合：
+
+これはPlaywrightのブラウザバイナリがmacOSのバージョンを正しく認識できていない可能性があります。以下の手順を試してください：
+
+1. **Playwrightを最新版にアップグレード**
+```bash
+pip install --upgrade playwright
+```
+
+2. **ブラウザを再インストール**
+```bash
+playwright install --force chromium
+```
+
+3. **すべてのブラウザを再インストール（推奨）**
+```bash
+playwright install --force
+```
+
+4. **それでも解決しない場合**
+   - Playwrightのバージョンを確認: `pip show playwright`
+   - 最新の安定版を使用しているか確認してください
+   - 問題が続く場合は、PlaywrightのGitHubリポジトリで既知の問題を確認してください
 
 ## ライセンス
 

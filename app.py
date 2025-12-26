@@ -1,12 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 import datetime
-import os
-from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright
-
-# .envファイルを読み込む
-load_dotenv()
+# Playwrightは後でインポート（tk.Tk()呼び出し後）
 
 class BeyondAutoApp:
     def __init__(self, root):
@@ -47,12 +42,21 @@ class BeyondAutoApp:
         tk.Label(container, text="6. URL末尾", font=("MS Gothic", 10, "bold"), bg="#ffffff").pack(anchor="w")
         self.dir_entry = tk.Entry(container, bd=1, relief="solid")
         self.dir_entry.pack(fill="x", pady=5, ipady=3)
-        self.refresh_url()
+        # デフォルトは空欄（refresh_url()は呼ばない）
 
-        self.run_btn = tk.Button(root, text="複製を実行する", command=self.run_automation, 
+        # ボタン用のフレーム
+        button_frame = tk.Frame(root, bg="#ffffff")
+        button_frame.pack(pady=10)
+        
+        self.reload_btn = tk.Button(button_frame, text="ページをリロード", command=self.reload_page,
+                                   bg="#ffffff", font=("MS Gothic", 10, "bold"),
+                                   relief="solid", bd=1, width=15, height=1)
+        self.reload_btn.pack(side="left", padx=5)
+        
+        self.run_btn = tk.Button(button_frame, text="複製を実行する", command=self.run_automation, 
                                  bg="#ffffff", font=("MS Gothic", 12, "bold"), 
-                                 relief="solid", bd=2, width=30, height=2)
-        self.run_btn.pack(pady=20)
+                                 relief="solid", bd=2, width=20, height=2)
+        self.run_btn.pack(side="left", padx=5)
 
         self.log_area = scrolledtext.ScrolledText(root, width=65, height=15)
         self.log_area.pack(padx=40, pady=(5, 30))
@@ -70,26 +74,17 @@ class BeyondAutoApp:
 
     def initial_scan(self):
         try:
-            # 環境変数からログイン情報を取得
-            email = os.getenv("SQUADBEYOND_EMAIL")
-            password = os.getenv("SQUADBEYOND_PASSWORD")
-            
-            if not email or not password:
-                self.add_log("エラー: 環境変数が設定されていません")
-                self.add_log("SQUADBEYOND_EMAIL と SQUADBEYOND_PASSWORD を設定してください")
-                self.status_label.config(text="環境変数未設定", fg="#ff0000")
-                messagebox.showerror("エラー", "環境変数が設定されていません\n\nSQUADBEYOND_EMAIL と SQUADBEYOND_PASSWORD を設定してください")
-                return
-            
             self.add_log("自動ログイン・スキャン開始...")
+            # Playwrightを遅延インポート（tk.Tk()呼び出し後）
+            from playwright.sync_api import sync_playwright
             self.pw = sync_playwright().start()
             self.browser = self.pw.chromium.launch(headless=False)
             self.context = self.browser.new_context()
             self.page = self.context.new_page()
             
             self.page.goto("https://app.squadbeyond.com/login")
-            self.page.get_by_role("textbox", name="メールアドレス").fill(email)
-            self.page.get_by_role("textbox", name="パスワード").fill(password)
+            self.page.get_by_role("textbox", name="メールアドレス").fill("youxiqiantian492@gmail.com")
+            self.page.get_by_role("textbox", name="パスワード").fill("kedGAe4KtKA64J_")
             self.page.locator('button[type="submit"]').click()
             self.page.wait_for_timeout(1500)
 
@@ -142,6 +137,49 @@ class BeyondAutoApp:
         except Exception as e:
             self.add_log(f"記事取得エラー: {e}")
 
+    def reload_page(self):
+        """ページをリロードして、グループ一覧を再取得"""
+        if not self.page:
+            self.add_log("エラー: ページが初期化されていません")
+            return
+        
+        try:
+            self.add_log("ページをリロード中...")
+            self.status_label.config(text="リロード中...", fg="#ff9900")
+            
+            # 現在のURLを取得してリロード
+            current_url = self.page.url
+            self.page.reload()
+            self.page.wait_for_timeout(2000)
+            
+            # 旧デザインに戻るボタンがあればクリック
+            try:
+                self.page.get_by_role("button", name="旧デザインに戻る").click(timeout=1000)
+                self.page.wait_for_timeout(1000)
+            except:
+                pass
+            
+            # グループ一覧を再取得
+            groups = self.page.evaluate("""() => Array.from(document.querySelectorAll('#ts-sortableFolderGroupList p.MuiTypography-body1')).map(p => p.innerText.trim())""")
+            self.parent_combo['values'] = sorted(list(set(groups)))
+            
+            # すべての選択をクリア
+            self.parent_combo.set('')  # グループ選択をクリア
+            self.child_combo['values'] = []  # フォルダ選択肢をクリア
+            self.child_combo.set('')  # フォルダ選択をクリア
+            self.target_combo['values'] = []  # 記事選択肢をクリア
+            self.target_combo.set('')  # 記事選択をクリア
+            
+            # 入力フィールドをクリア
+            self.new_title_entry.delete(0, tk.END)  # タイトルをクリア
+            self.dir_entry.delete(0, tk.END)  # URL末尾をクリア
+            
+            self.status_label.config(text="リロード完了", fg="#00aa00")
+            self.add_log("ページのリロードが完了しました（選択と入力もリセットされました）")
+        except Exception as e:
+            self.add_log(f"リロードエラー: {e}")
+            self.status_label.config(text="リロードエラー", fg="#ff0000")
+
     def run_automation(self):
         self.add_log("複製を実行します...")
         try:
@@ -150,31 +188,117 @@ class BeyondAutoApp:
             self.page.wait_for_timeout(300)
 
             xpath_menu = '/html/body/div[9]/div[3]/ul/li[5]/a'
+            self.page.locator(f"xpath={xpath_menu}").wait_for(state="visible", timeout=5000)
             self.page.locator(f"xpath={xpath_menu}").click()
+            self.add_log("メニューをクリック")
+
+            # 入力画面（Playwrightのfill()メソッドを使用）
+            popup = self.page.locator('div[role="dialog"]')
+            popup.wait_for(state="visible", timeout=10000)
+            self.add_log("ポップアップを確認しました")
+            
+            title = self.new_title_entry.get().strip()  # 先頭・末尾のスペースを削除
+            url = self.dir_entry.get().strip()  # 先頭・末尾のスペースを削除
+            
+            # URLが空の場合はエラー
+            if not url:
+                self.add_log("エラー: URL末尾が空欄です")
+                messagebox.showerror("エラー", "URL末尾を入力してください")
+                return
+            
+            self.add_log(f"指定タイトル: {title} / URL: {url} を書き込み中...")
+            
+            # タイトル入力欄（1番目のinput）
+            title_input = popup.locator('input').first
+            title_input.wait_for(state="visible", timeout=5000)
+            title_input.click()
+            # 既存の値を完全にクリア
+            title_input.press("Control+a")
+            title_input.press("Backspace")
+            self.page.wait_for_timeout(200)
+            title_input.fill(title)
             self.page.wait_for_timeout(500)
-
-            self.page.evaluate(f"""(arg) => {{
+            self.add_log("ページ名を入力しました")
+            
+            # URL入力欄（2番目のinput）
+            dir_input = popup.locator('input').nth(1)
+            dir_input.wait_for(state="visible", timeout=5000)
+            dir_input.click()
+            self.page.wait_for_timeout(200)
+            
+            # 既存の値を完全にクリアしてから新しい値を設定
+            # Reactの状態を確実に更新するため、evaluate()を使用
+            self.page.evaluate(f"""(url) => {{
                 const inputs = Array.from(document.querySelectorAll('div[role="dialog"] input')).filter(i => i.offsetHeight > 0);
-                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                setter.call(inputs[0], arg.t);
-                setter.call(inputs[1], arg.u);
-                inputs[0].dispatchEvent(new Event('input', {{ bubbles: true }}));
-                inputs[1].dispatchEvent(new Event('input', {{ bubbles: true }}));
-            }}""", {"t": self.new_title_entry.get(), "u": self.dir_entry.get()})
+                if (inputs.length >= 2) {{
+                    const urlInput = inputs[1];
+                    // 既存の値を完全にクリア
+                    urlInput.value = '';
+                    // Reactの状態を更新
+                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                    nativeInputValueSetter.call(urlInput, url);
+                    // イベントを発火
+                    urlInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    urlInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    urlInput.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                }}
+            }}""", url)
             
-            self.page.wait_for_timeout(300)
+            self.page.wait_for_timeout(1000)
+            self.add_log(f"ディレクトリ名を入力しました: {url}")
             
+            # バリデーションが完了するまで待機
+            self.page.wait_for_timeout(2000)
+            
+            # エラーメッセージが表示されていないか確認
+            error_detected = False
             try:
-                self.page.get_by_role("button", name="複製する").click(timeout=1000)
-            except:
-                self.page.locator('xpath=//*[@id=":r9i:"]/div[3]/button').click()
+                error_message = popup.locator('text=配信URL設定は不正な値です')
+                if error_message.is_visible(timeout=2000):
+                    error_detected = True
+                    self.add_log("警告: バリデーションエラーが検出されました")
+                    # エラーが表示されている場合、Playwrightのfill()メソッドで再試行
+                    dir_input.click()
+                    self.page.wait_for_timeout(200)
+                    dir_input.press("Control+a")
+                    dir_input.press("Backspace")
+                    self.page.wait_for_timeout(300)
+                    dir_input.fill(url)
+                    self.page.wait_for_timeout(2000)
+                    # 再度エラーチェック
+                    if error_message.is_visible(timeout=1000):
+                        self.add_log("エラー: バリデーションエラーが解消されませんでした")
+                        raise Exception("URLバリデーションエラー: 配信URL設定は不正な値です")
+                    else:
+                        self.add_log("バリデーション成功（再試行後）")
+                else:
+                    self.add_log("バリデーション成功")
+            except Exception as e:
+                if "バリデーションエラー" in str(e):
+                    raise
+                # エラーメッセージが見つからない場合は成功とみなす
+                self.add_log("バリデーション確認完了")
+            
+            # エラーが解消されていない場合は処理を中断
+            if error_detected:
+                try:
+                    if popup.locator('text=配信URL設定は不正な値です').is_visible(timeout=500):
+                        raise Exception("URLバリデーションエラー: 配信URL設定は不正な値です")
+                except:
+                    pass
+            
+            # 「複製する」ボタンをクリック
+            submit_btn = popup.get_by_role("button", name="複製する")
+            submit_btn.click()
+            self.add_log("複製確定ボタンをクリックしました")
 
-            self.page.wait_for_timeout(1500)
-            self.add_log("複製成功")
+            self.page.wait_for_timeout(3000)
+            self.add_log(f"【成功】タイトル: {title} で複製を完了しました")
+            messagebox.showinfo("成功", "複製完了")
             self.refresh_url()
-            messagebox.showinfo("成功", "複製完了しました")
         except Exception as e:
-            self.add_log(f"エラー: {e}")
+            self.add_log(f"中断: {e}")
+            messagebox.showerror("エラー", str(e))
 
 if __name__ == "__main__":
     root = tk.Tk()
